@@ -4,7 +4,18 @@ This repository contains the analysis presented in mhy Honours Thesis paper, "Ho
 
 This repository contains all material necessary to replicate the results of my paper. To replicate it, you will need R to execute the code. 
 
-## Folder01_Data
+The following outlines how this repository is structured:
+
+### Folder01_Data
+
+### Folder02_Processing
+
+### Folder03_Regressions
+
+### Folder04_Export_Tables
+
+### Folder05_Export_Plots
+
 
 <!--
 **tanjingling/tanjingling** is a ✨ _special_ ✨ repository because its `README.md` (this file) appears on your GitHub profile.
