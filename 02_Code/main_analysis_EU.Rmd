@@ -1,0 +1,477 @@
+---
+title: "main_analysis_EU"
+author: "Tan Jing Ling"
+date: "3/19/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Replication Code for Dataset with EU ETS Price Points
+
+# Import Carbon Pricing Dataset
+Obtained from the World Bank's Carbon Pricing Dashboard 
+```{r}
+# Set working directory
+#setwd("~/your_working_directory")
+
+# Import file
+library(readr)
+cppeu <- read_csv("Data files/CPP_ WithEU.csv")
+
+#Convert Country Name to iso3c 3-letter code
+library(countrycode)
+cppeu$ifs <- countryname(cppeu$Country, destination = 'iso3c')
+```
+
+# Import and Modify CEPII Dataset
+```{r}
+# Import file
+library(readr)
+dist_cepii <- read_csv("Data files/dist_cepii.csv")
+#Do remember to change the file path 
+
+##### Modifications
+
+# Keep only immediate neighbours
+dist2 <- subset(dist_cepii, subset = (contig == 1 ))
+
+# Remove dyadic duplicates of Country A-B / Country B-A
+dist2$compare <- ifelse (dist2$iso_o > dist2$iso_d, 
+                         paste(dist2$iso_o, dist2$iso_d, sep = "_"),
+                         paste(dist2$iso_d, dist2$iso_o, sep = "_"))
+library(dplyr)
+dist3 <- distinct(dist2, compare, .keep_all = TRUE) 
+```
+
+# Import and Modify World Bank Control Variable Data
+```{r}
+library(readr)
+WB <- read_csv("Data files/WBdata2.csv")
+#Do remember to change the file path 
+
+# Reshape data from Wide to Long Format (Add years to countries)
+library(tidyr)
+WB2 <- gather(data = WB, key = "Year", value = "Value", 5:34) 
+table(WB2$`Series Name`)
+
+#Split data from Long to Wide (split variables into columns)
+library(dplyr)
+WB2 %>% separate(`Series Name`, 
+c("GDP (constant 2015 US$)", 
+  "GDP per capita (constant 2015 US$)", "Trade (% of GDP)",
+  "Exports of goods and services (% of GDP)",
+  "Coal rents (% of GDP)",
+  "CO2 emissions (metric tons per capita)",
+  "Energy intensity level of primary energy (MJ/$2011 PPP GDP)",
+  "Energy use (kg of oil equivalent per capita)", 
+  "Methane emissions in energy sector (thousand metric tons of CO2 equivalent)",
+  "Nitrous oxide emissions in energy sector (thousand metric tons of CO2 equivalent)",
+  "Renewable energy consumption (% of total final energy consumption)",
+  "Energy imports, net (% of energy use)", 
+  "Population, total",
+  "Total greenhouse gas emissions (kt of CO2 equivalent)",
+  "Electric power consumption (kWh per capita)",
+  "Oil rents (% of GDP)",
+  "Total natural resources rents (% of GDP)",
+  "Natural gas rents (% of GDP)",
+  "Fossil fuel energy consumption (% of total)", NA))
+
+library(reshape2)
+WB3 <- dcast(WB2, `Country Name` + `Country Code` + `Year`~ `Series Name`, value.var = "Value")
+```
+
+# Merge CPP and CEPII data
+```{r}
+cppeu <- merge(x = cppeu, y = dist3, by.x = "ifs", by.y = "iso_o", all.x = TRUE) 
+
+#Reshape data by Country and Year
+cppeu2 <- gather(data = cppeu, key = "Year", value = "Price", 8:39) 
+cppeu2$id <- paste(cppeu2$ifs, cppeu2$Year, sep="_")
+
+#Create Variable with country-year of neighbours
+cppeu2$iso_d_year <- ifelse(cppeu2$iso_d == "", NA, 
+paste(cppeu2$iso_d, cppeu2$Year, sep="_"))
+```
+
+# Create new dataframe with iso_d_year prices (Neighbour, Country-Year Prices)
+```{r}
+isodcppeu <- merge(x= cppeu2, y = dist3, by.x = "ifs", by.y = "iso_d", all = TRUE)
+isodcppeu2 <- gather(data = isodcppeu, key = "Year", value = "Price", 8:39) 
+isodcppeu2$iso_d_year <- paste(isodcppeu2$ifs, isodcppeu2$Year, sep="_")
+isodcppeu3 <- data.frame(iso_d_year = as.character(isodcppeu2$iso_d_year), iso_d_price = as.numeric(isodcppeu2$Price))
+isodcppeu4 <- distinct(isodcppeu3, iso_d_year, .keep_all = TRUE)
+isodcppeu4$iso_d_adopt <- ifelse(isodcppeu4$iso_d_price > 0, 1, 0)
+
+# Merge iso_d prices to main dataset
+cppeu3 <- merge(x = cppeu2, y = isodcppeu4, by = "iso_d_year", all.x = TRUE)
+```
+
+# Obtain mean, min, max 
+For iso_d_price (Neighbour Price), Regional Price, and Global Price
+```{r}
+# Create neighbour df to isolate neighbouring mean, max, min prices
+neighbour <- cppeu3 %>% group_by(id) %>% 
+    summarise(mean_iso_d = mean(iso_d_price, na.rm =TRUE), 
+              min_iso_d = min(iso_d_price, na.rm = TRUE), 
+              max_iso_d = max(iso_d_price, na.rm = TRUE),
+              mean_iso_d_adopt = mean(iso_d_adopt, na.rm =TRUE),)
+
+cppeu3$regionyear <- paste(cppeu3$Region, cppeu3$Year, sep="_")
+
+# Create regional df to isolate regional mean, max, min prices
+
+regional <- cppeu3 %>% group_by(regionyear) %>% 
+    summarise(mean_region = mean(iso_d_price, na.rm =TRUE), 
+              min_region = min(iso_d_price, na.rm = TRUE), 
+              max_region = max(iso_d_price, na.rm = TRUE),
+              mean_region_adopt = mean(iso_d_adopt, na.rm=TRUE))
+
+cppeu3$NumberCPP <- ifelse(cppeu3$Price > 0, 1, 0)
+
+# Create glaobl df to isolate global mean, max, min prices
+
+global <- cppeu3 %>% group_by(Year) %>% 
+    summarise(mean_global = mean(Price, na.rm =TRUE),
+              mean_global_adopt = mean(NumberCPP, na.rm = TRUE))
+
+# Merge back into main df
+
+cppeu4 <- merge(x = cppeu3, y = neighbour, by = "id", all.x = TRUE)
+
+cppeu4.1 <- merge(x = cppeu4, y = regional, by = "regionyear", all.x = TRUE)
+
+cppeu4.2 <- merge(x = cppeu4.1, y = global, by = "Year", all.x = TRUE)
+
+# Remove NaN and infinite values
+
+cppeu4.2 <- do.call(data.frame,                   
+                   lapply(cppeu4.2,
+                          function(x) replace(x, is.infinite(x), NA)))
+
+cppeu4.2 <- do.call(data.frame,                   
+                   lapply(cppeu4.2,
+                          function(x) replace(x, is.nan(x), NA)))
+
+cppeu5 <- distinct(cppeu4.2, id, .keep_all = TRUE)
+```
+
+# Tidying World Bank Dataset
+```{r}
+table(WB2$`Series Name`)
+
+# Renaming variables
+
+names(WB3)[names(WB3) == "Country Name"] <- "Country"
+names(WB3)[names(WB3) == "Country Code"] <- "ifs" 
+names(WB3)[names(WB3) == "GDP (constant 2015 US$)"] <- "GDP"
+names(WB3)[names(WB3) == "CO2 emissions (metric tons per capita)"] <- "CO2_PC"
+names(WB3)[names(WB3) == "Electric power consumption (kWh per capita)"] <- "electricity_PC"
+names(WB3)[names(WB3) == "Energy imports, net (% of energy use)"] <- "energy_imports"
+names(WB3)[names(WB3) == "Energy intensity level of primary energy (MJ/$2011 PPP GDP)"] <- "energy_intensity"
+names(WB3)[names(WB3) == "Energy use (kg of oil equivalent per capita)"] <- "energy_use_pc"
+names(WB3)[names(WB3) == "Renewable energy consumption (% of total final energy consumption)"] <- "renewable"
+names(WB3)[names(WB3) == "Trade (% of GDP)"] <- "trade_gdp"
+names(WB3)[names(WB3) == "GDP per capita (constant 2015 US$)"] <- "GDP_PC"
+names(WB3)[names(WB3) == "Exports of goods and services (% of GDP)"] <- "exports_gdp"
+names(WB3)[names(WB3) == "Coal rents (% of GDP)"] <- "coal_gdp"
+names(WB3)[names(WB3) == "Fossil fuel energy consumption (% of total)"] <- "fossil_fuel"
+names(WB3)[names(WB3) == "Methane emissions in energy sector (thousand metric tons of CO2 equivalent)"] <- "methane_emissions"
+names(WB3)[names(WB3) == "Natural gas rents (% of GDP)"] <- "natural_gas_gdp"
+names(WB3)[names(WB3) == "Nitrous oxide emissions in energy sector (thousand metric tons of CO2 equivalent)"] <- "nitrous_oxide"
+names(WB3)[names(WB3) == "Oil rents (% of GDP)"] <- "oil_rent_gdp"
+names(WB3)[names(WB3) == "Population, total"] <- "population"
+names(WB3)[names(WB3) == "Total greenhouse gas emissions (kt of CO2 equivalent)"] <- "greenhouse_emissions"
+names(WB3)[names(WB3) == "Total natural resources rents (% of GDP)"] <- "natural_resource_gdp"
+```
+
+# Merging World Bank Data to CPP with Mofidications
+```{r}
+cppeu6 <- merge(x = cppeu5, y = WB3, by = c("ifs","Year"), all.x = TRUE) 
+
+# Creating log variables (Note: not all log values are used)
+
+# Divide GDP by 1000 and log 
+cppeu6$GDP <- as.numeric(cppeu6$GDP)
+cppeu6$GDPmillions <- cppeu6$GDP/1000000
+cppeu6$logGDPmillions <- log(cppeu6$GDPmillions)
+
+# Divide GDP_PC by 1000 and log
+cppeu6$GDP_PC <- as.numeric(cppeu6$GDP_PC)
+cppeu6$GDP_PCthousands <- cppeu6$GDP_PC/1000
+cppeu6$logGDP_PCthousands <- log(cppeu6$GDP_PCthousands)
+
+# Log energy use
+cppeu6$energy_use_pc<- as.numeric(cppeu6$energy_use_pc)
+cppeu6$logenergy_use_pc <- log(cppeu6$energy_use_pc)
+
+# Log energy intensity
+cppeu6$energy_intensity<- as.numeric(cppeu6$energy_intensity)
+cppeu6$logenergy_intensity <- log(cppeu6$energy_intensity)
+
+# Log coal
+cppeu6$coal_gdp <- as.numeric(cppeu6$coal_gdp)
+cppeu6$logcoal_gdp <- log(cppeu6$coal_gdp)
+
+# Log CO2
+cppeu6$CO2_PC <- as.numeric(cppeu6$CO2_PC)
+cppeu6$logCO2_PC <- log(cppeu6$CO2_PC)
+
+# Log Renewable
+cppeu6$renewable <- as.numeric(cppeu6$renewable)
+cppeu6$logrenewable <- log(cppeu6$renewable)
+
+# Log Exports
+cppeu6$exports_gdp <- as.numeric(cppeu6$exports_gdp)
+cppeu6$logexports_gdp <- log(cppeu6$exports_gdp)
+
+# Log Trade
+cppeu6$trade_gdp <- as.numeric(cppeu6$trade_gdp)
+cppeu6$logtrade_gdp<- log(cppeu6$trade_gdp)
+
+# Log Fossil Fuel 
+cppeu6$fossil_fuel <- as.numeric(cppeu6$fossil_fuel)
+cppeu6$logfossil_fuel<- log(cppeu6$fossil_fuel)
+
+# Log electricity
+cppeu6$electricity_PC <- as.numeric(cppeu6$electricity_PC)
+cppeu6$logelectricity_PC<- log(cppeu6$electricity_PC)
+
+# Log Greenhouse Emissions
+cppeu6$greenhouse_emissions <- as.numeric(cppeu6$greenhouse_emissions)
+cppeu6$loggreenhouse_emissions<- log(cppeu6$greenhouse_emissions)
+
+# Log nitrous_oxide
+cppeu6$nitrous_oxide <- as.numeric(cppeu6$nitrous_oxide)
+cppeu6$lognitrous_oxide<- log(cppeu6$nitrous_oxide)
+
+# Log Methane
+cppeu6$methane_emissions <- as.numeric(cppeu6$methane_emissions)
+cppeu6$logmethane_emissions<- log(cppeu6$methane_emissions)
+
+# Log Natural Gas Rents (% GDP)
+cppeu6$natural_gas_gdp <- as.numeric(cppeu6$natural_gas_gdp)
+cppeu6$lognatural_gas_gdp <- log(cppeu6$natural_gas_gdp)
+
+# Log Natural Resources
+cppeu6$natural_resource_gdp <- as.numeric(cppeu6$natural_resource_gdp)
+cppeu6$lognatural_resource_gdp <- log(cppeu6$natural_resource_gdp)
+
+# Log Population
+cppeu6$population <- as.numeric(cppeu6$population)
+cppeu6$populationby1000 <- cppeu6$population/1000
+cppeu6$logpopulation <- log(cppeu6$population)
+cppeu6$logpopulationby1000 <- log(cppeu6$populationby1000)
+
+# Log oil rents
+cppeu6$oil_rent_gdp <- as.numeric(cppeu6$oil_rent_gdp)
+cppeu6$logoil_rent_gdp <- log(cppeu6$oil_rent_gdp)
+
+# Log Energy Imports
+cppeu6$energy_imports <- as.numeric(cppeu6$energy_imports)
+cppeu6$logenergy_imports <- log(cppeu6$energy_imports)
+
+# Removing NaN and infinite values as a result of logging
+
+cppeu6 <- do.call(data.frame,                   
+                   lapply(cppeu6,
+                          function(x) replace(x, is.infinite(x), NA)))
+
+cppeu6 <- do.call(data.frame,                   
+                   lapply(cppeu6,
+                          function(x) replace(x, is.nan(x), NA)))
+```
+
+#Importing DPI Dataset
+For checks and balance control variable
+```{r}
+DPI <- read_csv("Data files/DPI.csv")
+```
+
+#Modifications to DPI Dataset + Merging
+```{r}
+
+# Modifications to DPI Dataset
+DPI$checks2 = DPI$checks_lax
+DPI$checks2[DPI$checks2 < 1] = NA
+
+# Rename variables to be consistent with the other dataframes
+names(DPI)[names(DPI) == "year"] <- "Year"
+
+# Merging 
+cppeu7 <- merge(x = cppeu6, y = DPI, by = c("ifs","Year"), all.x = TRUE) 
+```
+
+# Baseline Multiple Regressions 
+
+```{r}
+library(plm)
+library(stargazer)
+
+base_eu_mean<- plm(Price~mean_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cppeu7, index = "ifs", model = "within", na.action=na.exclude)
+
+base_eu_max<- plm(Price~max_iso_d + mean_region + mean_global + logGDPmillions +logGDP_PCthousands  + renewable + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2, data = cppeu7, index = "ifs", model = "within", na.action=na.exclude)
+
+base_eu_min<- plm(Price~min_iso_d  + mean_region + mean_global + logGDPmillions + logGDP_PCthousands  + renewable + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2, data = cppeu7, index = "ifs", model = "within", na.action=na.exclude)
+
+# Note that the lines above create a html file in your working directory with the regression output
+```
+
+# Random Effects and Hausman Test
+```{r}
+library(plm)
+
+base_eu_re<- plm(Price~mean_iso_d + logGDPmillions + logGDP_PCthousands + logenergy_intensity + logrenewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 + mean_region + mean_global, data = cppeu7, index = "ifs", model = "random", na.action=na.exclude)
+
+phtest(base_eu_mean, base_eu_re)
+```
+Results of Hausman test:
+p-value < 0.05
+Alternative hypothesis: one model is inconsistent
+Use fixed effects
+
+# Creating Sample Subset - with CPP Only  
+```{r}
+library(dplyr)
+cppeu8 <- cppeu7 %>% filter (NumberCPP == 1)
+
+```
+
+# Regression of Sample Subset
+```{r}
+library(stargazer)
+
+sub_eu_mean<- plm(Price~mean_iso_d +  mean_region + mean_global + logGDPmillions +logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2, data = cppeu8, index = "ifs", model = "within", na.action=na.exclude)
+
+sub_eu_max<- plm(Price~max_iso_d + mean_region + mean_global + logGDPmillions +logGDP_PCthousands  + renewable + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2, data = cppeu8, index = "ifs", model = "within", na.action=na.exclude)
+
+sub_eu_min<- plm(Price~min_iso_d + mean_region + mean_global + logGDPmillions +logGDP_PCthousands  + renewable + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cppeu8, index = "ifs", model = "within", na.action=na.exclude)
+
+EUsub <- stargazer(sub_eu_mean, sub_eu_max, sub_eu_min,
+          type = "html",
+          title = "EU Model- Neighbourhood Effect on Price of CPP (subset of results with Price >0)",
+          dep.var.labels = "CPP Price in Constant US Dollars",
+          column.labels = c("Mean Price", "Maximum Price", "Minimum Price"),
+          covariate.labels = c("Mean Carbon Price, Neighbours", "Maximum Carbon Price, Neighbours", "Minimum Carbon Price, Neighbours", "Regional Mean Price", "Global Mean Price", "GDP (Millions, Logged)", "GDP Per Capita (Thhousands, Logged)", "Renewable Energy Consumption (% of total)",  "Trade (% of GDP)", "CO2 emissions (Metric Tons Per Capita, Logged )","Natural Resource Rents (% of GDP)", "Population (Thousands, Logged)", "Check and Balances (DPI Index)"),
+          style = "apsr", notes.append = TRUE, notes.align = "c",
+          notes.label = 'Notes:',
+          notes ="\\parbox[t]{\\textwidth}{CCarbon Prices are those of a country's Immediate Neighbours}",
+          no.space=TRUE,
+          out = "EUsub.htm")
+# Note that the lines above create a html file in your working directory with the regression output
+```
+
+# Lagging Price 
+```{r}
+library("dplyr") 
+cppeu7$ifs <- as.character(cppeu7$ifs)
+
+# 1 Year Lag
+cppeu7 <- cppeu7 %>%                          
+  group_by(ifs) %>%
+  dplyr::mutate(PriceLagged = dplyr::lag(Price, n = 1, default = NA)) %>% 
+  as.data.frame()
+      
+# 2 Year Lag
+cppeu7 <- cppeu7 %>%                          
+  group_by(ifs) %>%
+  dplyr::mutate(PriceLagged2 = dplyr::lag(Price, n = 2, default = NA)) %>% 
+  as.data.frame()
+
+# 3 Year Lag
+cppeu7 <- cppeu7 %>%                          
+  group_by(ifs) %>%
+  dplyr::mutate(PriceLagged3 = dplyr::lag(Price, n = 3, default = NA)) %>% 
+  as.data.frame()
+
+# 4 Year Lag
+cppeu7 <- cppeu7 %>%                          
+  group_by(ifs) %>%
+  dplyr::mutate(PriceLagged4 = dplyr::lag(Price, n = 4, default = NA)) %>% 
+  as.data.frame()
+
+# 5 Year Lag
+cppeu7 <- cppeu7 %>%                          
+  group_by(ifs) %>%
+  dplyr::mutate(PriceLagged5 = dplyr::lag(Price, n = 5, default = NA)) %>% 
+  as.data.frame()
+
+# 10 Year Lag
+cppeu7 <- cppeu7 %>%                          
+  group_by(ifs) %>%
+  dplyr::mutate(PriceLagged10 = dplyr::lag(Price, n = 10, default = NA)) %>% 
+  as.data.frame()
+
+# 15 Year Lag
+cppeu7 <- cppeu7 %>%                          
+  group_by(ifs) %>%
+  dplyr::mutate(PriceLagged15 = dplyr::lag(Price, n = 15, default = NA)) %>% 
+  as.data.frame()
+```
+
+# Regression of Lagged Prices against Mean Neighbour Prices
+```{r}
+base_eu_mean<- plm(Price~mean_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cppeu7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag1_eu_mean<- plm(PriceLagged~mean_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cppeu7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag2_eu_mean<- plm(PriceLagged2~mean_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cppeu7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag3_eu_mean<- plm(PriceLagged3~mean_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cppeu7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag4_eu_mean<- plm(PriceLagged4~mean_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cppeu7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag5_eu_mean<- plm(PriceLagged5~mean_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cppeu7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag10_eu_mean<- plm(PriceLagged10~mean_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cppeu7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag15_eu_mean<- plm(PriceLagged15~mean_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cppeu7, index = "ifs", model = "within", na.action=na.exclude)
+
+EUmeanlag <- stargazer(base_eu_mean, lag1_eu_mean, lag2_eu_mean,lag3_eu_mean,lag4_eu_mean,lag5_eu_mean,lag10_eu_mean, lag15_eu_mean,
+          type = "html",
+          title = "EU Model - Neighbourhood Effect (Mean Prices) on Lagged Price of CPP",
+          dep.var.labels = "CPP Price in Constant US Dollars",
+          column.labels = c("No Lag", "One-Year Lag", "Two-Year Lag", "Three-Year Lag", "Four-Year Lag", "Five-Year Lag", "10-Year Lag", "15-Year Lag"),
+          covariate.labels = c("Mean Carbon Price, Neighbours", "Regional Mean Price","Global Mean Price by Year", "GDP (Millions, Logged )", "GDP Per Capita (Thousands, Logged )", "Renewable Energy Consumption (% of total)",  "Trade (% of GDP)", "CO2 emissions (Metric Tons Per Capita), Logged ","Natural Resource Rents (% of GDP)", "Population (Thousands, Logged)", "Check and Balances (DPI Index)"),
+          style = "apsr", notes.append = TRUE, notes.align = "c",
+          notes.label = 'Notes:',
+          notes ="\\parbox[t]{\\textwidth}{Carbon Prices are those of a country's Immediate Neighbours}",
+          no.space=TRUE,
+          out = "EUmeanlag.htm")
+# Note that the lines above create a html file in your working directory with the regression output
+```
+
+#Regression of Lagged Prices against Max Neighbour Prices
+```{r}
+base_eu_max<- plm(Price~max_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cppeu7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag1_eu_max<- plm(PriceLagged~max_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cppeu7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag2_eu_max<- plm(PriceLagged2~max_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cppeu7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag3_eu_max<- plm(PriceLagged3~max_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cppeu7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag4_eu_max<- plm(PriceLagged4~max_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cppeu7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag5_eu_max<- plm(PriceLagged5~max_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cppeu7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag10_eu_max<- plm(PriceLagged10~max_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cppeu7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag15_eu_max<- plm(PriceLagged15~max_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cppeu7, index = "ifs", model = "within", na.action=na.exclude)
+
+EUmaxlag <- stargazer(base_eu_max, lag1_eu_max, lag2_eu_max,lag3_eu_max,lag4_eu_max,lag5_eu_max,lag10_eu_max,lag15_eu_max,
+          type = "html",
+          title = "EU Model - Neighbourhood Effect (Max Prices) on Lagged Price of CPP",
+          dep.var.labels = "CPP Price in Constant US Dollars",
+          column.labels = c("No Lag", "One-Year Lag", "Two-Year Lag", "Three-Year Lag", "Four-Year Lag", "Five-Year Lag", "10-Year Lag", "15-Year Lag"),
+          covariate.labels = c("Max Carbon Price, Neighbours", "Regional Mean Price","Global Mean Price by Year", "GDP (Millions, Logged)", "GDP Per Capita (Thousands, Logged)", "Renewable Energy Consumption (% of total)",  "Trade (% of GDP)", "CO2 emissions (Metric Tonnes Per Capita, Logged)","Natural Resource Rents (% of GDP)", "Population (Thousands, Logged )", "Check and Balances (DPI Index)"),
+          style = "apsr", notes.append = TRUE, notes.align = "c",
+          notes.label = 'Notes:',
+          notes ="\\parbox[t]{\\textwidth}{Carbon Prices are those of a country's Immediate Neighbours}",
+          no.space=TRUE,
+          out = "EUmaxlag.htm")
+# Note that the lines above create a html file in your working directory with the regression output
+```
+
