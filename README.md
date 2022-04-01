@@ -6,15 +6,13 @@ This repository contains all material necessary to replicate the results of my p
 
 The following outlines how this repository is structured:
 
-### Folder01_Data
+### 01_Data
 
-### Folder02_Processing
+### 02_Code
 
-### Folder03_Regressions
+### 03_Outputs
 
-### Folder04_Export_Tables
 
-### Folder05_Export_Plots
 
 
 <!--
