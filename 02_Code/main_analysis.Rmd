@@ -1,0 +1,581 @@
+---
+title: "main_analysis"
+author: "Tan Jing Ling"
+date: "3/20/2022"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Replication Code for Dataset without EU ETS Price Points
+
+# Import Carbon Pricing Dataset
+Obtained from the World Bank's Carbon Pricing Dashboard 
+```{r}
+# Set working directory
+#setwd("~/your_working_directory")
+
+# Import file
+library(readr)
+cpp <- read_csv("Data files/CPP_ NoEU.csv")
+#Do remember to change the file path 
+
+#Convert Country Name to iso3c 3-letter code
+library(countrycode)
+cpp$ifs <- countryname(cpp$Country, destination = 'iso3c')
+```
+
+# Import and Modify CEPII Dataset
+```{r}
+# Import file
+library(readr)
+dist_cepii <- read_csv("Data files/dist_cepii.csv")
+#Do remember to change the file path 
+
+# Modifications
+
+# Keep only immediate neighbours
+dist2 <- subset(dist_cepii, subset = (contig == 1 ))
+
+# Remove dyadic duplicates of Country A-B / Country B-A
+dist2$compare <- ifelse (dist2$iso_o > dist2$iso_d, 
+                         paste(dist2$iso_o, dist2$iso_d, sep = "_"),
+                         paste(dist2$iso_d, dist2$iso_o, sep = "_"))
+library(dplyr)
+dist3 <- distinct(dist2, compare, .keep_all = TRUE) 
+```
+
+# Import and Modify World Bank Control Variable Data
+```{r}
+library(readr)
+WB <- read_csv("Data files/WBdata2.csv")
+#Do remember to change the file path 
+
+#Reshape data from Wide to Long Format (Add years to countries)
+library(tidyr)
+WB2 <- gather(data = WB, key = "Year", value = "Value", 5:34) 
+table(WB2$`Series Name`)
+
+#Split data from Long to Wide (split variables into columns)
+library(dplyr)
+WB2 %>% separate(`Series Name`, 
+c("GDP (constant 2015 US$)", 
+  "GDP per capita (constant 2015 US$)", "Trade (% of GDP)",
+  "Exports of goods and services (% of GDP)",
+  "Coal rents (% of GDP)",
+  "CO2 emissions (metric tons per capita)",
+  "Energy intensity level of primary energy (MJ/$2011 PPP GDP)",
+  "Energy use (kg of oil equivalent per capita)", 
+  "Methane emissions in energy sector (thousand metric tons of CO2 equivalent)",
+  "Nitrous oxide emissions in energy sector (thousand metric tons of CO2 equivalent)",
+  "Renewable energy consumption (% of total final energy consumption)",
+  "Energy imports, net (% of energy use)", 
+  "Population, total",
+  "Total greenhouse gas emissions (kt of CO2 equivalent)",
+  "Electric power consumption (kWh per capita)",
+  "Oil rents (% of GDP)",
+  "Total natural resources rents (% of GDP)",
+  "Natural gas rents (% of GDP)",
+  "Fossil fuel energy consumption (% of total)", NA))
+
+library(reshape2)
+WB3 <- dcast(WB2, `Country Name` + `Country Code` + `Year`~ `Series Name`, value.var = "Value")
+```
+
+# Merge CPP and CEPII data
+```{r}
+cpp <- merge(x = cpp, y = dist3, by.x = "ifs", by.y = "iso_o", all.x = TRUE) 
+
+# Reshape data by Country and Year
+cpp2 <- gather(data = cpp, key = "Year", value = "Price", 8:39) 
+cpp2$id <- paste(cpp2$ifs, cpp2$Year, sep="_")
+
+# Create Variable with country-year of neighbours
+cpp2$iso_d_year <- ifelse(cpp2$iso_d == "", NA, 
+paste(cpp2$iso_d, cpp2$Year, sep="_"))
+```
+
+# Create new dataframe with iso_d_year prices (Neighbour, Country-Year Prices)
+```{r}
+isodcpp <- merge(x= cpp, y = dist3, by.x = "ifs", by.y = "iso_d", all = TRUE)
+isodcpp2 <- gather(data = isodcpp, key = "Year", value = "Price", 8:39) 
+isodcpp2$iso_d_year <- paste(isodcpp2$ifs, isodcpp2$Year, sep="_")
+isodcpp3 <- data.frame(iso_d_year = as.character(isodcpp2$iso_d_year), iso_d_price = as.numeric(isodcpp2$Price))
+isodcpp4 <- distinct(isodcpp3, iso_d_year, .keep_all = TRUE)
+isodcpp4$iso_d_adopt <- ifelse(isodcpp4$iso_d_price > 0, 1, 0)
+
+# Merge iso_d prices to main dataset
+cpp3 <- merge(x = cpp2, y = isodcpp4, by = "iso_d_year", all.x = TRUE)
+```
+
+# Obtain mean, min, max 
+For iso_d_price (Neighbour Price), Regional Price, and Global Price
+```{r warning = FALSE}
+# Create neighbour df to isolate neighbouring mean, max, min prices
+neighbour_noeu <- cpp3 %>% group_by(id) %>% 
+    summarise(mean_iso_d = mean(iso_d_price, na.rm =TRUE), 
+              min_iso_d = min(iso_d_price, na.rm = TRUE), 
+              max_iso_d = max(iso_d_price, na.rm = TRUE),
+              mean_iso_d_adopt = mean(iso_d_adopt, na.rm =TRUE),)
+
+# Create regional df to isolate regional mean, max, min prices
+
+cpp3$regionyear <- paste(cpp3$Region, cpp3$Year, sep="_")
+
+regional_noeu <- cpp3 %>% group_by(regionyear) %>% 
+    summarise(mean_region = mean(iso_d_price, na.rm =TRUE), 
+              min_region = min(iso_d_price, na.rm = TRUE), 
+              max_region = max(iso_d_price, na.rm = TRUE),
+              mean_region_adopt = mean(iso_d_adopt, na.rm=TRUE))
+
+cpp3$NumberCPP <- ifelse(cpp3$Price > 0, 1, 0)
+
+# Create global df to isolate global mean, max, min prices
+
+global_noeu <- cpp3 %>% group_by(Year) %>% 
+    summarise(mean_global = mean(Price, na.rm =TRUE),
+              mean_global_adopt = mean(NumberCPP, na.rm = TRUE))
+
+# Merge back into main df
+
+cpp4 <- merge(x = cpp3, y = neighbour_noeu, by = "id", all.x = TRUE)
+
+cpp4.1 <- merge(x = cpp4, y = regional_noeu, by = "regionyear", all.x = TRUE)
+
+cpp4.2 <- merge(x = cpp4.1, y = global_noeu, by = "Year", all.x = TRUE)
+
+# Remove NaN and infinite values
+
+cpp4.2 <- do.call(data.frame,                   
+                   lapply(cpp4.2,
+                          function(x) replace(x, is.infinite(x), NA)))
+
+cpp4.2 <- do.call(data.frame,                   
+                   lapply(cpp4.2,
+                          function(x) replace(x, is.nan(x), NA)))
+
+cpp5 <- distinct(cpp4.2, id, .keep_all = TRUE)
+```
+
+# Tidying World Bank Dataset
+```{r}
+table(WB2$`Series Name`)
+
+# Renaming variables
+
+names(WB3)[names(WB3) == "Country Name"] <- "Country"
+names(WB3)[names(WB3) == "Country Code"] <- "ifs" 
+names(WB3)[names(WB3) == "GDP (constant 2015 US$)"] <- "GDP"
+names(WB3)[names(WB3) == "CO2 emissions (metric tons per capita)"] <- "CO2_PC"
+names(WB3)[names(WB3) == "Electric power consumption (kWh per capita)"] <- "electricity_PC"
+names(WB3)[names(WB3) == "Energy imports, net (% of energy use)"] <- "energy_imports"
+names(WB3)[names(WB3) == "Energy intensity level of primary energy (MJ/$2011 PPP GDP)"] <- "energy_intensity"
+names(WB3)[names(WB3) == "Energy use (kg of oil equivalent per capita)"] <- "energy_use_pc"
+names(WB3)[names(WB3) == "Renewable energy consumption (% of total final energy consumption)"] <- "renewable"
+names(WB3)[names(WB3) == "Trade (% of GDP)"] <- "trade_gdp"
+names(WB3)[names(WB3) == "GDP per capita (constant 2015 US$)"] <- "GDP_PC"
+names(WB3)[names(WB3) == "Exports of goods and services (% of GDP)"] <- "exports_gdp"
+names(WB3)[names(WB3) == "Coal rents (% of GDP)"] <- "coal_gdp"
+names(WB3)[names(WB3) == "Fossil fuel energy consumption (% of total)"] <- "fossil_fuel"
+names(WB3)[names(WB3) == "Methane emissions in energy sector (thousand metric tons of CO2 equivalent)"] <- "methane_emissions"
+names(WB3)[names(WB3) == "Natural gas rents (% of GDP)"] <- "natural_gas_gdp"
+names(WB3)[names(WB3) == "Nitrous oxide emissions in energy sector (thousand metric tons of CO2 equivalent)"] <- "nitrous_oxide"
+names(WB3)[names(WB3) == "Oil rents (% of GDP)"] <- "oil_rent_gdp"
+names(WB3)[names(WB3) == "Population, total"] <- "population"
+names(WB3)[names(WB3) == "Total greenhouse gas emissions (kt of CO2 equivalent)"] <- "greenhouse_emissions"
+names(WB3)[names(WB3) == "Total natural resources rents (% of GDP)"] <- "natural_resource_gdp"
+```
+
+# Merging World Bank Data to CPP
+```{r warning = FALSE}
+cpp6 <- merge(x = cpp5, y = WB3, by = c("ifs","Year"), all.x = TRUE) 
+
+# Creating log variables (Note: not all log values are used)
+
+#Divide GDP by 1000 and log 
+cpp6$GDP <- as.numeric(cpp6$GDP)
+cpp6$GDPmillions <- cpp6$GDP/1000000
+cpp6$logGDPmillions <- log(cpp6$GDPmillions)
+
+#Divide GDP_PC by 1000 and log
+cpp6$GDP_PC <- as.numeric(cpp6$GDP_PC)
+cpp6$GDP_PCthousands <- cpp6$GDP_PC/1000
+cpp6$logGDP_PCthousands <- log(cpp6$GDP_PCthousands)
+
+# Log energy use
+cpp6$energy_use_pc<- as.numeric(cpp6$energy_use_pc)
+cpp6$logenergy_use_pc <- log(cpp6$energy_use_pc)
+
+# Log energy intensity
+cpp6$energy_intensity<- as.numeric(cpp6$energy_intensity)
+cpp6$logenergy_intensity <- log(cpp6$energy_intensity)
+
+# Log coal
+cpp6$coal_gdp <- as.numeric(cpp6$coal_gdp)
+cpp6$logcoal_gdp <- log(cpp6$coal_gdp)
+
+# Log CO2
+cpp6$CO2_PC <- as.numeric(cpp6$CO2_PC)
+cpp6$logCO2_PC <- log(cpp6$CO2_PC)
+
+# Log Renewable
+cpp6$renewable <- as.numeric(cpp6$renewable)
+cpp6$logrenewable <- log(cpp6$renewable)
+
+# Log Exports
+cpp6$exports_gdp <- as.numeric(cpp6$exports_gdp)
+cpp6$logexports_gdp <- log(cpp6$exports_gdp)
+
+# Log Trade
+cpp6$trade_gdp <- as.numeric(cpp6$trade_gdp)
+cpp6$logtrade_gdp<- log(cpp6$trade_gdp)
+
+# Log Fossil Fuel 
+cpp6$fossil_fuel <- as.numeric(cpp6$fossil_fuel)
+cpp6$logfossil_fuel<- log(cpp6$fossil_fuel)
+
+# Log electricity
+cpp6$electricity_PC <- as.numeric(cpp6$electricity_PC)
+cpp6$logelectricity_PC<- log(cpp6$electricity_PC)
+
+# Log Greenhouse Emissions
+cpp6$greenhouse_emissions <- as.numeric(cpp6$greenhouse_emissions)
+cpp6$loggreenhouse_emissions<- log(cpp6$greenhouse_emissions)
+
+# Log nitrous_oxide
+cpp6$nitrous_oxide <- as.numeric(cpp6$nitrous_oxide)
+cpp6$lognitrous_oxide<- log(cpp6$nitrous_oxide)
+
+# Log Methane
+cpp6$methane_emissions <- as.numeric(cpp6$methane_emissions)
+cpp6$logmethane_emissions<- log(cpp6$methane_emissions)
+
+# Log Natural Gas Rents (% GDP)
+cpp6$natural_gas_gdp <- as.numeric(cpp6$natural_gas_gdp)
+cpp6$lognatural_gas_gdp <- log(cpp6$natural_gas_gdp)
+
+# Log Natural Resources
+cpp6$natural_resource_gdp <- as.numeric(cpp6$natural_resource_gdp)
+cpp6$lognatural_resource_gdp <- log(cpp6$natural_resource_gdp)
+
+# Log Population
+cpp6$population <- as.numeric(cpp6$population)
+cpp6$populationby1000 <- cpp6$population/1000
+cpp6$logpopulation <- log(cpp6$population)
+cpp6$logpopulationby1000 <- log(cpp6$populationby1000)
+
+# Log oil rents
+cpp6$oil_rent_gdp <- as.numeric(cpp6$oil_rent_gdp)
+cpp6$logoil_rent_gdp <- log(cpp6$oil_rent_gdp)
+
+# Log Energy Imports
+cpp6$energy_imports <- as.numeric(cpp6$energy_imports)
+cpp6$logenergy_imports <- log(cpp6$energy_imports)
+
+# Removing NaN and infinite values as a result of logging
+
+cpp6 <- do.call(data.frame,                   
+                   lapply(cpp6,
+                          function(x) replace(x, is.infinite(x), NA)))
+
+cpp6 <- do.call(data.frame,                   
+                   lapply(cpp6,
+                          function(x) replace(x, is.nan(x), NA)))
+```
+
+# Importing DPI Dataset
+For checks and balance control variable
+```{r}
+DPI <- read_csv("Data files/DPI.csv")
+#Do remember to change the file path 
+```
+
+# Modifications to DPI Dataset + Merging
+```{r}
+# Modifications to DPI Dataset
+
+DPI$checks2 = DPI$checks_lax
+DPI$checks2[DPI$checks2 < 1] = NA
+
+# Rename 
+names(DPI)[names(DPI) == "year"] <- "Year"
+
+# Merging 
+cpp7 <- merge(x = cpp6, y = DPI, by = c("ifs","Year"), all.x = TRUE) 
+```
+
+# Baseline Multiple Regressions 
+```{r}
+library(plm)
+library(stargazer)
+
+base_mean<- plm(Price~mean_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cpp7, index = "ifs", model = "within", na.action=na.exclude)
+
+base_max<- plm(Price~max_iso_d + mean_region + mean_global + logGDPmillions +logGDP_PCthousands  + renewable + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2, data = cpp7, index = "ifs", model = "within", na.action=na.exclude)
+
+base_min<- plm(Price~min_iso_d  + mean_region + mean_global + logGDPmillions + logGDP_PCthousands  + renewable + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2, data = cpp7, index = "ifs", model = "within", na.action=na.exclude)
+
+base <- stargazer(base_mean, base_max, base_min,
+          type = "html",
+          title = "Table 2: Baseline Results - Neighbourhood Effect on Price of CPP",
+          dep.var.labels = "CPP Price in Constant US Dollars",
+          column.labels = c("Mean Price", "Maximum Price", "Minimum Price"),
+          covariate.labels = c("Mean Carbon Price, Neighbours", "Maximum Carbon Price, Neighbours", "Minimum Carbon Price, Neighbours", "Regional Mean Price","Global Mean Price by Year", "Logged GDP (Millions, Logged)", "GDP Per Capita (Thousands, Logged)", "Renewable Energy Consumption (% of total)",  "Trade (% of GDP)", "CO2 emissions (Metric Tonnes Per Capita), Logged","Natural Resource Rents (% of GDP)", "Population (Thousands, Logged)", "Check and Balances (DPI Index)"),
+          style = "apsr", notes.append = TRUE, notes.align = "c",
+          notes.label = 'Notes:',
+          notes ="\\parbox[t]{\\textwidth}{Carbon Prices are those of a country's Immediate Neighbours}",
+          no.space=TRUE,
+          out = "base.htm")
+```
+
+# Random Effects and Hausman Test
+```{r}
+library(plm)
+
+base_re<- plm(Price~mean_iso_d + logGDPmillions + logGDP_PCthousands + logenergy_intensity + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 + mean_region + mean_global, data = cpp7, index = "ifs", model = "random", na.action=na.exclude)
+
+phtest(base_mean, base_re)
+```
+Results of Hausman test:
+p-value < 0.05
+Alternative hypothesis: one model is inconsistent
+Use fixed effects
+
+# Creating Sample Subset - with CPP Only  
+```{r}
+library(dplyr)
+library(tidyverse)
+cpp8 <- cpp7 %>% filter (NumberCPP == 1)
+```
+
+# Regression of Sample Subset
+```{r}
+library(stargazer)
+
+sub_mean<- plm(Price~mean_iso_d +  mean_region + mean_global + logGDPmillions +logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2, data = cpp8, index = "ifs", model = "within", na.action=na.exclude)
+summary(sub_mean)
+
+sub_max<- plm(Price~max_iso_d + mean_region + mean_global + logGDPmillions +logGDP_PCthousands  + renewable + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2, data = cpp8, index = "ifs", model = "within", na.action=na.exclude)
+
+sub_min<- plm(Price~min_iso_d + mean_region + mean_global + logGDPmillions +logGDP_PCthousands  + renewable + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cpp8, index = "ifs", model = "within", na.action=na.exclude)
+
+sub <- stargazer(sub_mean, sub_max, sub_min,
+          type = "html",
+          title = "Table 2: Neighbourhood Effect on Price of CPP (subset of results with Price >0)",
+          dep.var.labels = "CPP Price in Constant US Dollars",
+          column.labels = c("Mean Price", "Maximum Price", "Minimum Price"),
+          covariate.labels = c("Mean Carbon Price, Neighbours", "Maximum Carbon Price, Neighbours", "Minimum Carbon Price, Neighbours", "Regional Mean Price", "Global Mean Price", "GDP (Millions, Logged )", " GDP Per Capita (Thousands, Logged)", "Renewable Energy Consumption (% of total)",  "Trade (% of GDP)", "CO2 emissions (Metric Tonnes Per Capita, Logged )","Natural Resource Rents (% of GDP)", "Population (Thousands, Logged)", "Check and Balances (DPI Index)"),
+          style = "apsr", notes.append = TRUE, notes.align = "c",
+          notes.label = 'Notes:',
+          notes ="\\parbox[t]{\\textwidth}{CCarbon Prices are those of a country's Immediate Neighbours}",
+          no.space=TRUE,
+          out = "sub.htm")
+```
+
+# Lagging Price 
+```{r}
+library("dplyr") 
+cpp7$ifs <- as.character(cpp7$ifs)
+
+# 1 Year Lag
+cpp7 <- cpp7 %>%                          
+  group_by(ifs) %>%
+  dplyr::mutate(PriceLagged = dplyr::lag(Price, n = 1, default = NA)) %>% 
+  as.data.frame()
+      
+# 2 Year Lag
+cpp7 <- cpp7 %>%                          
+  group_by(ifs) %>%
+  dplyr::mutate(PriceLagged2 = dplyr::lag(Price, n = 2, default = NA)) %>% 
+  as.data.frame()
+
+# 3 Year Lag
+cpp7 <- cpp7 %>%                          
+  group_by(ifs) %>%
+  dplyr::mutate(PriceLagged3 = dplyr::lag(Price, n = 3, default = NA)) %>% 
+  as.data.frame()
+
+# 4 Year Lag
+cpp7 <- cpp7 %>%                          
+  group_by(ifs) %>%
+  dplyr::mutate(PriceLagged4 = dplyr::lag(Price, n = 4, default = NA)) %>% 
+  as.data.frame()
+
+# 5 Year Lag
+cpp7 <- cpp7 %>%                          
+  group_by(ifs) %>%
+  dplyr::mutate(PriceLagged5 = dplyr::lag(Price, n = 5, default = NA)) %>% 
+  as.data.frame()
+
+# 10 Year Lag
+cpp7 <- cpp7 %>%                          
+  group_by(ifs) %>%
+  dplyr::mutate(PriceLagged10 = dplyr::lag(Price, n = 10, default = NA)) %>% 
+  as.data.frame()
+
+# 15 Year Lag
+cpp7 <- cpp7 %>%                          
+  group_by(ifs) %>%
+  dplyr::mutate(PriceLagged15 = dplyr::lag(Price, n = 15, default = NA)) %>% 
+  as.data.frame()
+```
+
+# Regression of Lagged Prices against Mean Neighbour Prices
+```{r}
+base_mean<- plm(Price~mean_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cpp7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag1_mean<- plm(PriceLagged~mean_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cpp7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag2_mean<- plm(PriceLagged2~mean_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cpp7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag3_mean<- plm(PriceLagged3~mean_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cpp7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag4_mean<- plm(PriceLagged4~mean_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cpp7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag5_mean<- plm(PriceLagged5~mean_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cpp7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag10_mean<- plm(PriceLagged10~mean_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cpp7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag15_mean<- plm(PriceLagged15~mean_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cpp7, index = "ifs", model = "within", na.action=na.exclude)
+
+meanlag <- stargazer(base_mean, lag1_mean, lag2_mean,lag3_mean,lag4_mean,lag5_mean,lag10_mean, lag15_mean,
+          type = "html",
+          title = "Neighbourhood Effect (Mean Prices) on Lagged Price of CPP",
+          dep.var.labels = "CPP Price in Constant US Dollars",
+          column.labels = c("No Lag", "One-Year Lag", "Two-Year Lag", "Three-Year Lag", "Four-Year Lag", "Five-Year Lag","10-Year Lag", "15-Year Lag"),
+          covariate.labels = c("Mean Carbon Price, Neighbours", "Regional Mean Price","Global Mean Price by Year", "GDP (Millions, Logged)", "GDP Per Capita (Thousands, Logged)", "Renewable Energy Consumption (% of total)",  "Trade (% of GDP)", "CO2 emissions (Metric Tonnes Per Capita, Logged)","Natural Resource Rents (% of GDP)", "Population (Thousands, Logged)", "Check and Balances (DPI Index)"),
+          style = "apsr", notes.append = TRUE, notes.align = "c",
+          notes.label = 'Notes:',
+          notes ="\\parbox[t]{\\textwidth}{Carbon Prices are those of a country's Immediate Neighbours}",
+          no.space=TRUE,
+          out = "meanlag.htm")
+```
+
+#Regression of Lagged Prices against Max Neighbour Prices
+```{r}
+base_max<- plm(Price~max_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cpp7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag1_max<- plm(PriceLagged~max_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cpp7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag2_max<- plm(PriceLagged2~max_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cpp7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag3_max<- plm(PriceLagged3~max_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cpp7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag4_max<- plm(PriceLagged4~max_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cpp7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag5_max<- plm(PriceLagged5~max_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cpp7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag10_max<- plm(PriceLagged10~max_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cpp7, index = "ifs", model = "within", na.action=na.exclude)
+
+lag15_max<- plm(PriceLagged15~max_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cpp7, index = "ifs", model = "within", na.action=na.exclude)
+
+maxlag <- stargazer(base_max, lag1_max, lag2_max,lag3_max,lag4_max,lag5_max,lag10_max, lag15_max,
+          type = "html",
+          title = "Neighbourhood Effect (Max Prices) on Lagged Price of CPP",
+          dep.var.labels = "CPP Price in Constant US Dollars",
+          column.labels = c("No Lag", "One-Year Lag", "Two-Year Lag", "Three-Year Lag", "Four-Year Lag", "Five-Year Lag","10-Year Lag", "15-Year Lag"),
+          covariate.labels = c("Max Carbon Price, Neighbours", "Regional Mean Price","Global Mean Price by Year", "GDP (Millions, Logged)", "GDP Per Capita (Thousands, Logged)", "Renewable Energy Consumption (% of total)",  "Trade (% of GDP)", "CO2 emissions (Metric Tonnes Per Capita, Logged)","Natural Resource Rents (% of GDP)", "Population (Thousands, Logged)", "Check and Balances (DPI Index)"),
+          style = "apsr", notes.append = TRUE, notes.align = "c",
+          notes.label = 'Notes:',
+          notes ="\\parbox[t]{\\textwidth}{Carbon Prices are those of a country's Immediate Neighbours}",
+          no.space=TRUE,
+          out = "maxlag.htm")
+```
+
+# Descriptive Statistics
+```{r }
+# Table 1 in Paper
+
+library(stargazer)
+stargazer(cpp7[c("Price", "mean_iso_d", "min_iso_d", "max_iso_d", "mean_region", "mean_global","renewable", "trade_gdp", "logGDPmillions", "logGDP_PCthousands","logCO2_PC", "lognatural_resource_gdp", "logpopulationby1000","checks2")], 
+          type = "html",
+          title = "Table of Variables and Proposed Effects", 
+          summary.stat = c("n", "mean", "sd", "min", "max"),
+          covariate.labels = c("Price","Neighbour, Mean Price", "Neighbour, Minimum Price","Neighbour, Maximum Price", "Region, Mean Price","Global Mean Price by Year","Renewable Energy Consumption (% of total)",  "Trade (% of GDP)",  "GDP (millionths, Logged)", "GDP Per Capita (Thousandths, Logged)","CO2 emissions (Metric Tons Per Capita, Logged)","Natural Resource Rents (% of GDP)","Population (Thousandths,Logged)","Check and Balances (DPI Index)"),
+          style = "apsr",
+          digits =  2,
+          out = "variables.htm")
+```
+
+# Plots
+```{r}
+library(ggplot2)
+library(dplyr)
+library(patchwork) # To display 2 charts together
+library(hrbrthemes)
+
+sumCPP <- cpp8 %>% group_by(Year) %>% 
+    summarise(sum_CPP = sum(NumberCPP, na.rm =TRUE),
+              mean_PRICE = mean(Price, na.rm=TRUE))
+
+sumCPP$Year <- as.numeric(sumCPP$Year)
+sumCPP$sum_CPP <- as.numeric(sumCPP$sum_CPP)
+sumCPP$mean_PRICE <- as.numeric(sumCPP$mean_PRICE)
+
+ggplot(sumCPP, aes(x=Year)) + 
+  geom_line(aes(y = sum_CPP), color = "darkred") + 
+  geom_line(aes(y = mean_PRICE), color="steelblue", linetype="twodash") +
+  scale_y_continuous(name = "Total Number of CPP Adoptions", sec.axis = sec_axis(~., name ="Mean Carbon Price of Adopters (US$/tCO2e)")) +
+  theme_ipsum() +
+  scale_x_continuous(breaks = seq(1990, 2019, by = 5)) +
+  
+  theme(
+    axis.title.y = element_text(color = "darkred", size=13),
+    axis.title.y.right = element_text(color = "steelblue", size=13)
+  ) +
+    ggtitle("Fig 1. Carbon Pricing Adoptions and Price Trends", subtitle = "World Bank Data: 1990-2019 | Country Level Only")
+
+
+# Nordic Country plots (Fig)
+
+scandi <- subset(cpp7, subset = (Country.x == "Sweden" | Country.x == "Finland" | Country.x == "Poland" | 
+                                   Country.x == "Norway" | Country.x == "Denmark"))
+
+scandi$Year <- as.numeric(scandi$Year)
+scandi$Price <- as.numeric(scandi$Price)
+
+ggplot(scandi, aes(x=Year, y = Price, group = Country.x, color = Country.x)) + 
+  geom_line() +
+  geom_point() +
+  scale_color_manual(values = c("darkred", "steelblue", "grey", "#FFDB6D", "#52854C")) +
+  scale_y_continuous(name = "Mean Carbon Price (US$/tCO2e)") +
+  theme_ipsum() +
+  scale_x_continuous(breaks = seq(1990, 2019, by = 5)) +
+  
+  theme(
+    axis.title.y = element_text(size=13)
+  ) +
+    ggtitle("Fig 5. Carbon Prices Among Early Adopters", subtitle = "World Bank Data: 1990-2019 | Excluding EU ETS Data")
+```
+
+# Predictions
+```{r}
+# Creating data subset with only Finland 
+library(tidyverse) 
+Finland.newdat <- cpp7 %>% filter (Country.x == "Finland")
+Finland.newdat2 <- cpp7 %>% filter (Country.x == "Finland")
+Finland.newdat2$mean_iso_d = 0 
+
+# Removing intercept for regressions (to plot predictions)
+base_mean_plot<- plm(Price~0  + mean_iso_d + mean_region + mean_global + logGDPmillions + logGDP_PCthousands + renewable  + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2 , data = cpp7, index = "ifs", model = "within", na.action=na.exclude)
+
+pred.Finland =  predict(base_mean_plot, newdata = Finland.newdat, Year = 1990:2019)
+pred.Finland2 =  predict(base_mean_plot, newdata = Finland.newdat2, Year = 1990:2019)
+
+# Fig 6. Predicted Carbon Prices for Finland
+
+fig5 <- plot(x= c(1992:2019), y =pred.Finland, xlab = "Year",  ylab = "Carbon Prices (in US$/tCO2)", main  = "Predicted Carbon Prices for Finland", sub = "World Bank Data: 1990-2019 | With and Without Neighbouring Price Effects", pch = 21, col ="darkred")
+lines(x=1992:2019, y = pred.Finland2, col ="steelblue", lty ="twodash")
+text(2015, 8, "Without Neighbour Effect", col = "steelblue")
+text(2003, 40, "With Neighbour Effect", col = "darkred")
+theme_ipsum()
+theme(
+    axis.title.y = element_text(size=13)
+  )
+fig5
+```
+
