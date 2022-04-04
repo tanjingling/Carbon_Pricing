@@ -12,7 +12,7 @@ This folder contains only csv data files that are used in this project. The data
 ### 02_Code
 This folder contains only markdown files that document this project, plus accompanying knitted html files. One set of files document the main analysis conducted using the csv data files, including the plots and descriptive statistics made. Another set of files documents the supplementary analysis conducted with the inclusion of the EU ETS prices. 
 
-### 03_Outputs
+### 03_Output
 This folder contains the output files -- the key regression summary tables and plots used in the paper. 
 
 The affordance of these replication files aims to further public knowledge and scrunity of carbon pricing policies in the world. I intend to supplement the findings of this paper through future extensions that explore other mechanisms of diffusion -- particularly how trade and perceived competition affects the interdependence of carbon pricing. 
