@@ -10,7 +10,7 @@ The following outlines how this repository is structured:
 This folder contains only csv data files that are used in this project. The data is obtained from publicly available datasets from the World Bank, the Databse of Political Institutions 2020, and the French CEPII gravity database (updated as of Oct 2021). Some interpolation and modifications are made, as described in the paper. 
 
 ### 02_Code
-This folder contains only markdown files that document this project, plus accompanying knitted html files. One set of files document the main analysis conducted using the csv data files, including the plots and descriptive statistics made. Another set of files documents the supplementary analysis conducted with the inclusion of the EU ETS prices. 
+This folder contains only markdown files that document this project, plus accompanying knitted html files. One set of files documents the main analysis conducted using the csv data files, including the plots and descriptive statistics made. Another set of files documents the supplementary analysis conducted with the inclusion of the EU ETS prices. 
 
 ### 03_Output
 This folder contains the output files -- the key regression summary tables and plots used in the paper. 
