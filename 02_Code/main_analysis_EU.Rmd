@@ -20,6 +20,7 @@ Obtained from the World Bank's Carbon Pricing Dashboard
 # Import file
 library(readr)
 cppeu <- read_csv("Data files/CPP_ WithEU.csv")
+#Do remember to change the file path 
 
 #Convert Country Name to iso3c 3-letter code
 library(countrycode)
@@ -87,18 +88,18 @@ WB3 <- dcast(WB2, `Country Name` + `Country Code` + `Year`~ `Series Name`, value
 ```{r}
 cppeu <- merge(x = cppeu, y = dist3, by.x = "ifs", by.y = "iso_o", all.x = TRUE) 
 
-#Reshape data by Country and Year
+# Reshape data by Country and Year
 cppeu2 <- gather(data = cppeu, key = "Year", value = "Price", 8:39) 
 cppeu2$id <- paste(cppeu2$ifs, cppeu2$Year, sep="_")
 
-#Create Variable with country-year of neighbours
+# Create Variable with country-year of neighbours
 cppeu2$iso_d_year <- ifelse(cppeu2$iso_d == "", NA, 
 paste(cppeu2$iso_d, cppeu2$Year, sep="_"))
 ```
 
 # Create new dataframe with iso_d_year prices (Neighbour, Country-Year Prices)
 ```{r}
-isodcppeu <- merge(x= cppeu2, y = dist3, by.x = "ifs", by.y = "iso_d", all = TRUE)
+isodcppeu <- merge(x= cppeu, y = dist3, by.x = "ifs", by.y = "iso_d", all = TRUE)
 isodcppeu2 <- gather(data = isodcppeu, key = "Year", value = "Price", 8:39) 
 isodcppeu2$iso_d_year <- paste(isodcppeu2$ifs, isodcppeu2$Year, sep="_")
 isodcppeu3 <- data.frame(iso_d_year = as.character(isodcppeu2$iso_d_year), iso_d_price = as.numeric(isodcppeu2$Price))
@@ -111,7 +112,7 @@ cppeu3 <- merge(x = cppeu2, y = isodcppeu4, by = "iso_d_year", all.x = TRUE)
 
 # Obtain mean, min, max 
 For iso_d_price (Neighbour Price), Regional Price, and Global Price
-```{r}
+```{r warning = FALSE} 
 # Create neighbour df to isolate neighbouring mean, max, min prices
 neighbour <- cppeu3 %>% group_by(id) %>% 
     summarise(mean_iso_d = mean(iso_d_price, na.rm =TRUE), 
@@ -188,7 +189,7 @@ names(WB3)[names(WB3) == "Total natural resources rents (% of GDP)"] <- "natural
 ```
 
 # Merging World Bank Data to CPP with Mofidications
-```{r}
+```{r warning = FALSE}
 cppeu6 <- merge(x = cppeu5, y = WB3, by = c("ifs","Year"), all.x = TRUE) 
 
 # Creating log variables (Note: not all log values are used)
@@ -288,11 +289,11 @@ cppeu6 <- do.call(data.frame,
 For checks and balance control variable
 ```{r}
 DPI <- read_csv("Data files/DPI.csv")
+#Do remember to change the file path 
 ```
 
 #Modifications to DPI Dataset + Merging
 ```{r}
-
 # Modifications to DPI Dataset
 DPI$checks2 = DPI$checks_lax
 DPI$checks2[DPI$checks2 < 1] = NA
@@ -306,7 +307,7 @@ cppeu7 <- merge(x = cppeu6, y = DPI, by = c("ifs","Year"), all.x = TRUE)
 
 # Baseline Multiple Regressions 
 
-```{r}
+```{r }
 library(plm)
 library(stargazer)
 
@@ -315,6 +316,18 @@ base_eu_mean<- plm(Price~mean_iso_d + mean_region + mean_global + logGDPmillions
 base_eu_max<- plm(Price~max_iso_d + mean_region + mean_global + logGDPmillions +logGDP_PCthousands  + renewable + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2, data = cppeu7, index = "ifs", model = "within", na.action=na.exclude)
 
 base_eu_min<- plm(Price~min_iso_d  + mean_region + mean_global + logGDPmillions + logGDP_PCthousands  + renewable + trade_gdp + logCO2_PC +  lognatural_resource_gdp + logpopulationby1000  + checks2, data = cppeu7, index = "ifs", model = "within", na.action=na.exclude)
+
+EUbase <- stargazer(base_eu_mean, base_eu_max, base_eu_min,
+          type = "html",
+          title = "EU Model - Neighbourhood Effect on Price of CPP",
+          dep.var.labels = "CPP Price in Constant US Dollars",
+          column.labels = c("Mean Price", "Maximum Price", "Minimum Price"),
+          covariate.labels = c("Mean Carbon Price, Neighbours", "Maximum Carbon Price, Neighbours", "Minimum Carbon Price, Neighbours", "Regional Mean Price","Global Mean Price by Year", "GDP (Millions, Logged)", "GDP Per Capita (Thousands, Logged)", "Renewable Energy Consumption (% of total)",  "Trade (% of GDP)", "CO2 emissions (Metric Tonnes Per Capita, Logged )","Natural Resource Rents (% of GDP)", "Population (Thousands, Logged )", "Check and Balances (DPI Index)"),
+          style = "apsr", notes.append = TRUE, notes.align = "c",
+          notes.label = 'Notes:',
+          notes ="\\parbox[t]{\\textwidth}{Carbon Prices are those of a country's Immediate Neighbours}",
+          no.space=TRUE,
+          out = "EUbase.htm")
 
 # Note that the lines above create a html file in your working directory with the regression output
 ```
